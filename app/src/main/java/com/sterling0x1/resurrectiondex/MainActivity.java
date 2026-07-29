@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
@@ -19,6 +20,7 @@ import android.view.WindowInsetsController;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.ProgressBar;
@@ -46,11 +48,13 @@ public final class MainActivity extends Activity {
     private EditText search;
     private LinearLayout detail;
     private TextView sourceLabel;
+    private SpriteRepository spriteRepository;
     private PokemonEntry selected;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        spriteRepository = new SpriteRepository(this);
         setContentView(buildUi());
         hideSystemBars();
         loadActiveData();
@@ -175,7 +179,11 @@ public final class MainActivity extends Activity {
     private void applyLoad(DexRepository.LoadResult result) {
         allEntries.clear();
         allEntries.addAll(result.entries);
-        sourceLabel.setText(result.sourceName + " • " + allEntries.size() + " entries");
+        String spriteSummary = spriteRepository.count() > 0
+                ? " • " + spriteRepository.count() + " sprites"
+                : "";
+        sourceLabel.setText(result.sourceName + " • " + allEntries.size()
+                + " entries" + spriteSummary);
         search.setText("");
         applyFilter("");
         if (!visibleEntries.isEmpty()) {
@@ -215,16 +223,7 @@ public final class MainActivity extends Activity {
     private void renderDetail(PokemonEntry entry) {
         detail.removeAllViews();
 
-        TextView id = text(entry.displayId(), 13, Color.rgb(170, 176, 188), Typeface.BOLD);
-        detail.addView(id);
-        TextView name = text(entry.name.toUpperCase(Locale.ROOT), 27, Color.WHITE, Typeface.BOLD);
-        detail.addView(name);
-
-        LinearLayout badges = new LinearLayout(this);
-        badges.setOrientation(LinearLayout.HORIZONTAL);
-        badges.setPadding(0, dp(5), 0, dp(8));
-        for (String type : entry.types) badges.addView(typeBadge(type));
-        detail.addView(badges);
+        detail.addView(buildIdentityHeader(entry));
 
         TypeChart.Matchups matchups = typeChart.defend(entry.types);
         addSection("WEAK TO", joinOrDash(matchups.weak));
@@ -257,6 +256,67 @@ public final class MainActivity extends Activity {
             note.setPadding(0, dp(16), 0, 0);
             detail.addView(note);
         }
+    }
+
+
+    private View buildIdentityHeader(PokemonEntry entry) {
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+
+        LinearLayout identity = new LinearLayout(this);
+        identity.setOrientation(LinearLayout.VERTICAL);
+
+        TextView id = text(entry.displayId(), 13, Color.rgb(170, 176, 188), Typeface.BOLD);
+        identity.addView(id);
+
+        TextView name = text(entry.name.toUpperCase(Locale.ROOT), 27, Color.WHITE, Typeface.BOLD);
+        identity.addView(name);
+
+        LinearLayout badges = new LinearLayout(this);
+        badges.setOrientation(LinearLayout.HORIZONTAL);
+        badges.setPadding(0, dp(5), 0, dp(8));
+        for (String type : entry.types) badges.addView(typeBadge(type));
+        identity.addView(badges);
+
+        header.addView(identity, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+        ));
+
+        FrameLayout spriteFrame = new FrameLayout(this);
+        spriteFrame.setPadding(dp(6), dp(6), dp(6), dp(6));
+        spriteFrame.setBackground(rounded(
+                Color.rgb(27, 30, 37),
+                dp(10),
+                Color.rgb(68, 73, 86),
+                1
+        ));
+
+        Drawable sprite = spriteRepository.frontFor(entry);
+        if (sprite != null) {
+            ImageView image = new ImageView(this);
+            image.setImageDrawable(sprite);
+            image.setAdjustViewBounds(true);
+            image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            spriteFrame.addView(image, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    Gravity.CENTER
+            ));
+        } else {
+            TextView missing = text("NO\nSPRITE", 10, Color.rgb(115, 121, 134), Typeface.BOLD);
+            missing.setGravity(Gravity.CENTER);
+            spriteFrame.addView(missing, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    Gravity.CENTER
+            ));
+        }
+
+        LinearLayout.LayoutParams spriteParams = new LinearLayout.LayoutParams(dp(112), dp(112));
+        spriteParams.setMargins(dp(12), 0, 0, dp(4));
+        header.addView(spriteFrame, spriteParams);
+        return header;
     }
 
     private void addHeading(String value) {
