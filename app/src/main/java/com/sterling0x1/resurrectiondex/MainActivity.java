@@ -49,12 +49,14 @@ public final class MainActivity extends Activity {
     private LinearLayout detail;
     private TextView sourceLabel;
     private SpriteRepository spriteRepository;
+    private DescriptionRepository descriptionRepository;
     private PokemonEntry selected;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         spriteRepository = new SpriteRepository(this);
+        descriptionRepository = new DescriptionRepository(this);
         setContentView(buildUi());
         hideSystemBars();
         loadActiveData();
@@ -225,6 +227,11 @@ public final class MainActivity extends Activity {
 
         detail.addView(buildIdentityHeader(entry));
 
+        String description = entry.description.isEmpty()
+                ? descriptionRepository.forEntry(entry)
+                : entry.description;
+        if (!description.isEmpty()) addPokedexEntry(description);
+
         TypeChart.Matchups matchups = typeChart.defend(entry.types);
         addSection("WEAK TO", joinOrDash(matchups.weak));
         addSection("RESISTS", joinOrDash(matchups.resist));
@@ -245,11 +252,10 @@ public final class MainActivity extends Activity {
         if (!abilityLines.isEmpty()) addSection("ABILITIES", String.join("  •  ", abilityLines));
         if (!entry.evolutions.isEmpty()) addSection("EVOLUTION", String.join("\n", entry.evolutions));
         if (!entry.moves.isEmpty()) addSection("MOVE SAMPLE", String.join("  •  ", entry.moves));
-        if (!entry.description.isEmpty()) addSection("NOTES", entry.description);
 
         if (!entry.hasRichData()) {
             TextView note = text(
-                    "Basic CSV profile loaded. Types and defensive matchups are complete. " +
+                    "Basic CSV profile loaded. Sprites, Pokédex text, types and defensive matchups are complete. " +
                             "Stats, abilities, evolutions, encounters and learnsets will appear when a full Resurrection JSON pack is imported.",
                     12, Color.rgb(170, 176, 188), Typeface.NORMAL
             );
@@ -317,6 +323,33 @@ public final class MainActivity extends Activity {
         spriteParams.setMargins(dp(12), 0, 0, dp(4));
         header.addView(spriteFrame, spriteParams);
         return header;
+    }
+
+    private void addPokedexEntry(String body) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(12), dp(9), dp(12), dp(10));
+        card.setBackground(rounded(
+                Color.rgb(27, 30, 37),
+                dp(9),
+                Color.rgb(68, 73, 86),
+                1
+        ));
+
+        TextView heading = text("POKÉDEX ENTRY", 12, Color.rgb(235, 105, 105), Typeface.BOLD);
+        heading.setPadding(0, 0, 0, dp(4));
+        card.addView(heading);
+
+        TextView value = text(body, 13, Color.rgb(226, 229, 235), Typeface.NORMAL);
+        value.setLineSpacing(0, 1.12f);
+        card.addView(value);
+
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        params.setMargins(0, dp(4), 0, dp(4));
+        detail.addView(card, params);
     }
 
     private void addHeading(String value) {

@@ -9,3 +9,4 @@ captures/
 .externalNativeBuild/
 .cxx/
 app/src/main/assets/sprites/
+app/src/main/assets/dex_descriptions.json

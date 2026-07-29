@@ -28,6 +28,7 @@ jobs:
           fetch-depth: 1
           sparse-checkout: |
             graphics/pokemon
+            src/data/pokemon/species_info
           sparse-checkout-cone-mode: true
 
       - name: Package expansion sprites
@@ -35,6 +36,12 @@ jobs:
           python3 resurrection-dex/tools/sync_expansion_sprites.py
           pokeemerald-expansion
           resurrection-dex/app/src/main/assets/sprites
+
+      - name: Package expansion Pokédex descriptions
+        run: >-
+          python3 resurrection-dex/tools/sync_expansion_descriptions.py
+          pokeemerald-expansion
+          resurrection-dex/app/src/main/assets/dex_descriptions.json
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
