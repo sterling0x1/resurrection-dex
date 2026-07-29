@@ -251,7 +251,7 @@ public final class MainActivity extends Activity {
         if (!entry.hiddenAbility.isEmpty()) abilityLines.add("Hidden: " + entry.hiddenAbility);
         if (!abilityLines.isEmpty()) addSection("ABILITIES", String.join("  •  ", abilityLines));
         if (!entry.evolutions.isEmpty()) addSection("EVOLUTION", String.join("\n", entry.evolutions));
-        if (!entry.moves.isEmpty()) addSection("MOVE SAMPLE", String.join("  •  ", entry.moves));
+        if (!entry.moves.isEmpty()) addSection("LEVEL-UP MOVES", String.join("\n", entry.moves));
 
         if (!entry.hasRichData()) {
             TextView note = text(

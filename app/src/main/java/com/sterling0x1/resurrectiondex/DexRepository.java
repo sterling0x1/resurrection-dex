@@ -28,6 +28,7 @@ import java.util.Map;
 final class DexRepository {
     private static final String SAVED_FILE = "active_dex_pack";
     private static final String SAVED_FORMAT = "active_dex_format";
+    private static final String BUNDLED_PROFILE = "expansion_profile.json";
     private static final String BUNDLED_SAMPLE = "sample_dex.json";
 
     static final class LoadResult {
@@ -59,7 +60,10 @@ final class DexRepository {
                 saveMergedProfile(context, merged);
                 return merged;
             }
-            return parsed;
+
+            // Re-enrich profiles saved by earlier builds from the current
+            // generated expansion profile. Imported fields always win.
+            return enrichWithBundled(context, parsed);
         }
         return loadBundledSample(context);
     }
@@ -90,13 +94,40 @@ final class DexRepository {
         }
 
         saveProfile(context, bytes, "json");
-        return parsed;
+        return enrichWithBundled(context, parsed);
     }
 
     private LoadResult loadBundledSample(Context context) throws IOException, JSONException {
-        try (InputStream input = context.getAssets().open(BUNDLED_SAMPLE)) {
-            return parseJson(input, "Bundled sample — import your pokedex.csv");
+        try (InputStream input = context.getAssets().open(BUNDLED_PROFILE)) {
+            return parseJson(input, "Generated Project Resurrection profile");
+        } catch (IOException missingGeneratedProfile) {
+            try (InputStream input = context.getAssets().open(BUNDLED_SAMPLE)) {
+                return parseJson(input, "Bundled sample — import your pokedex.csv");
+            }
         }
+    }
+
+    private LoadResult enrichWithBundled(
+            Context context,
+            LoadResult profile
+    ) throws IOException, JSONException {
+        LoadResult bundled = loadBundledSample(context);
+        DetailIndex fallback = new DetailIndex(bundled.entries);
+
+        List<PokemonEntry> enriched = new ArrayList<>();
+        boolean rich = false;
+        for (PokemonEntry current : profile.entries) {
+            PokemonEntry entry = mergeEntry(
+                    current,
+                    current,
+                    fallback.find(current)
+            );
+            rich |= entry.hasRichData();
+            enriched.add(entry);
+        }
+
+        sort(enriched);
+        return new LoadResult(enriched, profile.sourceName, rich);
     }
 
     private LoadResult mergeCsvWithDetails(
@@ -278,7 +309,7 @@ final class DexRepository {
                 } catch (NumberFormatException ignored) {
                     continue; // header or malformed row
                 }
-                String name = titleCase(parts[1].trim());
+                String name = repairCsvName(id, titleCase(parts[1].trim()));
                 List<String> types = new ArrayList<>();
                 addType(types, parts[2]);
                 if (parts.length > 3) addType(types, parts[3]);
@@ -386,6 +417,21 @@ final class DexRepository {
     private static void addType(List<String> result, String raw) {
         String type = raw == null ? "" : raw.trim();
         if (!type.isEmpty() && !"unknown".equalsIgnoreCase(type)) result.add(titleCase(type));
+    }
+
+    private static String repairCsvName(int id, String parsedName) {
+        // The generated CSV has already replaced these Unicode characters
+        // with '?'. National Pokédex IDs are stable, so repair the names here.
+        switch (id) {
+            case 29:
+                return "Nidoran♀";
+            case 32:
+                return "Nidoran♂";
+            case 669:
+                return "Flabébé";
+            default:
+                return parsedName;
+        }
     }
 
     private static String titleCase(String raw) {
