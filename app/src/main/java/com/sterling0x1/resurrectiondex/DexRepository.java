@@ -17,14 +17,18 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 final class DexRepository {
     private static final String SAVED_FILE = "active_dex_pack";
     private static final String SAVED_FORMAT = "active_dex_format";
+    private static final String BUNDLED_SAMPLE = "sample_dex.json";
 
     static final class LoadResult {
         final List<PokemonEntry> entries;
@@ -43,13 +47,21 @@ final class DexRepository {
                 .getString(SAVED_FORMAT, "");
         File saved = new File(context.getFilesDir(), SAVED_FILE);
         if (saved.isFile() && !format.isEmpty()) {
+            LoadResult parsed;
             try (InputStream input = new FileInputStream(saved)) {
-                return parse(input, format, "Imported Resurrection profile");
+                parsed = parse(input, format, "Imported Resurrection profile");
             }
+
+            // Migrate profiles saved by older builds, which stored raw CSV and
+            // therefore discarded all richer fields after an app restart.
+            if ("csv".equals(format)) {
+                LoadResult merged = mergeCsvWithDetails(context, parsed, null);
+                saveMergedProfile(context, merged);
+                return merged;
+            }
+            return parsed;
         }
-        try (InputStream input = context.getAssets().open("sample_dex.json")) {
-            return parseJson(input, "Bundled sample — import your pokedex.csv");
-        }
+        return loadBundledSample(context);
     }
 
     LoadResult importDocument(Context context, Uri uri) throws IOException, JSONException {
@@ -64,6 +76,136 @@ final class DexRepository {
         LoadResult parsed = parse(new ByteArrayInputStream(bytes), format, "Imported Resurrection profile");
         if (parsed.entries.isEmpty()) throw new IOException("The selected file contained no valid Pokémon rows.");
 
+        if ("csv".equals(format)) {
+            LoadResult previous = null;
+            try {
+                previous = loadActive(context);
+            } catch (IOException | JSONException ignored) {
+                // A broken previous profile must never prevent a fresh import.
+            }
+
+            LoadResult merged = mergeCsvWithDetails(context, parsed, previous);
+            saveMergedProfile(context, merged);
+            return merged;
+        }
+
+        saveProfile(context, bytes, "json");
+        return parsed;
+    }
+
+    private LoadResult loadBundledSample(Context context) throws IOException, JSONException {
+        try (InputStream input = context.getAssets().open(BUNDLED_SAMPLE)) {
+            return parseJson(input, "Bundled sample — import your pokedex.csv");
+        }
+    }
+
+    private LoadResult mergeCsvWithDetails(
+            Context context,
+            LoadResult csv,
+            LoadResult preferredDetails
+    ) throws IOException, JSONException {
+        LoadResult bundled = loadBundledSample(context);
+        DetailIndex preferred = preferredDetails == null ? null : new DetailIndex(preferredDetails.entries);
+        DetailIndex fallback = new DetailIndex(bundled.entries);
+
+        List<PokemonEntry> merged = new ArrayList<>();
+        boolean rich = false;
+        for (PokemonEntry basic : csv.entries) {
+            PokemonEntry first = preferred == null ? null : preferred.find(basic);
+            PokemonEntry second = fallback.find(basic);
+            PokemonEntry entry = mergeEntry(basic, first, second);
+            rich |= entry.hasRichData();
+            merged.add(entry);
+        }
+        sort(merged);
+        return new LoadResult(
+                merged,
+                "Imported Resurrection profile (CSV + preserved details)",
+                rich
+        );
+    }
+
+    private static PokemonEntry mergeEntry(
+            PokemonEntry basic,
+            PokemonEntry preferred,
+            PokemonEntry fallback
+    ) {
+        PokemonEntry.Stats stats = firstKnownStats(preferred, fallback);
+        List<String> abilities = firstList(preferred == null ? null : preferred.abilities,
+                fallback == null ? null : fallback.abilities);
+        String hiddenAbility = firstText(preferred == null ? "" : preferred.hiddenAbility,
+                fallback == null ? "" : fallback.hiddenAbility);
+        List<String> evolutions = firstList(preferred == null ? null : preferred.evolutions,
+                fallback == null ? null : fallback.evolutions);
+        List<String> moves = firstList(preferred == null ? null : preferred.moves,
+                fallback == null ? null : fallback.moves);
+        String description = firstText(preferred == null ? "" : preferred.description,
+                fallback == null ? "" : fallback.description);
+
+        List<String> types = basic.types.isEmpty()
+                ? firstList(preferred == null ? null : preferred.types,
+                        fallback == null ? null : fallback.types)
+                : basic.types;
+
+        return new PokemonEntry(
+                basic.id,
+                basic.name,
+                types,
+                stats,
+                abilities,
+                hiddenAbility,
+                evolutions,
+                moves,
+                description
+        );
+    }
+
+    private static PokemonEntry.Stats firstKnownStats(PokemonEntry... entries) {
+        for (PokemonEntry entry : entries) {
+            if (entry != null && entry.stats.isKnown()) return entry.stats;
+        }
+        return PokemonEntry.Stats.unknown();
+    }
+
+    @SafeVarargs
+    private static <T> List<T> firstList(List<T>... values) {
+        for (List<T> value : values) {
+            if (value != null && !value.isEmpty()) return value;
+        }
+        return new ArrayList<>();
+    }
+
+    private static String firstText(String... values) {
+        for (String value : values) {
+            if (value != null && !value.trim().isEmpty()) return value.trim();
+        }
+        return "";
+    }
+
+    private static final class DetailIndex {
+        private final Map<String, PokemonEntry> byName = new HashMap<>();
+        private final Map<Integer, PokemonEntry> byId = new HashMap<>();
+
+        DetailIndex(List<PokemonEntry> entries) {
+            if (entries == null) return;
+            for (PokemonEntry entry : entries) {
+                String key = canonical(entry.name);
+                if (!key.isEmpty()) byName.putIfAbsent(key, entry);
+                byId.putIfAbsent(entry.id, entry);
+            }
+        }
+
+        PokemonEntry find(PokemonEntry basic) {
+            PokemonEntry match = byName.get(canonical(basic.name));
+            return match != null ? match : byId.get(basic.id);
+        }
+    }
+
+    private void saveMergedProfile(Context context, LoadResult result) throws IOException, JSONException {
+        saveProfile(context, serialise(result), "json");
+    }
+
+    private void saveProfile(Context context, byte[] bytes, String format) throws IOException {
         File target = new File(context.getFilesDir(), SAVED_FILE);
         try (FileOutputStream output = new FileOutputStream(target)) {
             output.write(bytes);
@@ -72,7 +214,48 @@ final class DexRepository {
                 .edit()
                 .putString(SAVED_FORMAT, format)
                 .apply();
-        return parsed;
+    }
+
+    private static byte[] serialise(LoadResult result) throws JSONException {
+        JSONObject root = new JSONObject();
+        JSONObject manifest = new JSONObject();
+        manifest.put("name", "Imported Resurrection profile");
+        manifest.put("formatVersion", 1);
+        manifest.put("formatLabel", "CSV + details");
+        root.put("manifest", manifest);
+
+        JSONArray species = new JSONArray();
+        for (PokemonEntry entry : result.entries) {
+            JSONObject item = new JSONObject();
+            item.put("id", entry.id);
+            item.put("name", entry.name);
+            item.put("types", toJson(entry.types));
+
+            if (entry.stats.isKnown()) {
+                JSONObject stats = new JSONObject();
+                stats.put("hp", entry.stats.hp);
+                stats.put("attack", entry.stats.attack);
+                stats.put("defense", entry.stats.defense);
+                stats.put("spAttack", entry.stats.spAttack);
+                stats.put("spDefense", entry.stats.spDefense);
+                stats.put("speed", entry.stats.speed);
+                item.put("stats", stats);
+            }
+            if (!entry.abilities.isEmpty()) item.put("abilities", toJson(entry.abilities));
+            if (!entry.hiddenAbility.isEmpty()) item.put("hiddenAbility", entry.hiddenAbility);
+            if (!entry.evolutions.isEmpty()) item.put("evolutions", toJson(entry.evolutions));
+            if (!entry.moves.isEmpty()) item.put("moves", toJson(entry.moves));
+            if (!entry.description.isEmpty()) item.put("description", entry.description);
+            species.put(item);
+        }
+        root.put("species", species);
+        return root.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static JSONArray toJson(List<String> values) {
+        JSONArray array = new JSONArray();
+        for (String value : values) array.put(value);
+        return array;
     }
 
     private LoadResult parse(InputStream input, String format, String sourceName) throws IOException, JSONException {
@@ -126,6 +309,7 @@ final class DexRepository {
         JSONObject manifest = root.optJSONObject("manifest");
         String manifestName = manifest == null ? "" : manifest.optString("name", "");
         String label = manifestName.isEmpty() ? sourceName : manifestName;
+        String formatLabel = manifest == null ? "JSON" : manifest.optString("formatLabel", "JSON");
 
         List<PokemonEntry> result = new ArrayList<>();
         boolean rich = false;
@@ -169,7 +353,7 @@ final class DexRepository {
             result.add(entry);
         }
         sort(result);
-        return new LoadResult(result, label + " (JSON)", rich);
+        return new LoadResult(result, label + " (" + formatLabel + ")", rich);
     }
 
     private static List<String> jsonStrings(JSONArray array) {
@@ -215,6 +399,20 @@ final class DexRepository {
             out.append(Character.toUpperCase(word.charAt(0))).append(word.substring(1));
         }
         return out.toString();
+    }
+
+    private static String canonical(String value) {
+        if (value == null) return "";
+        String normalised = value.replace("♀", " f").replace("♂", " m");
+        normalised = Normalizer.normalize(normalised, Normalizer.Form.NFKD)
+                .toLowerCase(Locale.ROOT);
+
+        StringBuilder result = new StringBuilder(normalised.length());
+        for (int index = 0; index < normalised.length(); index++) {
+            char character = normalised.charAt(index);
+            if (Character.isLetterOrDigit(character)) result.append(character);
+        }
+        return result.toString();
     }
 
     private static void sort(List<PokemonEntry> entries) {
